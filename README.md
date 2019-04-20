@@ -16,14 +16,14 @@ Make sure you have read binance API document before continuing.
 ### Installation
 
 ```shell
-go get github.com/adshao/go-binance
+go get github.com/aiviaio/go-binance
 ```
 
 ### Importing
 
 ```golang
 import (
-    "github.com/adshao/go-binance"
+    "github.com/aiviaio/go-binance"
 )
 ```
 
