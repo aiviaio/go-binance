@@ -147,7 +147,7 @@ type CreateOrderResponse struct {
 	Price               string  `json:"price"`
 	OrigQuantity        string  `json:"origQty"`
 	ExecutedQuantity    string  `json:"executedQty"`
-	СummulativeQuoteQty string `json:"cummulativeQuoteQty"`
+	СummulativeQuoteQty string  `json:"cummulativeQuoteQty"`
 	Status              string  `json:"status"`
 	TimeInForce         string  `json:"timeInForce"`
 	Type                string  `json:"type"`
