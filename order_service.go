@@ -140,18 +140,19 @@ func (s *CreateOrderService) Test(ctx context.Context, opts ...RequestOption) (e
 
 // CreateOrderResponse define create order response
 type CreateOrderResponse struct {
-	Symbol           string  `json:"symbol"`
-	OrderID          int64   `json:"orderId"`
-	ClientOrderID    string  `json:"clientOrderId"`
-	TransactTime     int64   `json:"transactTime"`
-	Price            string  `json:"price"`
-	OrigQuantity     string  `json:"origQty"`
-	ExecutedQuantity string  `json:"executedQty"`
-	Status           string  `json:"status"`
-	TimeInForce      string  `json:"timeInForce"`
-	Type             string  `json:"type"`
-	Side             string  `json:"side"`
-	Fills            []*Fill `json:"fills"`
+	Symbol              string  `json:"symbol"`
+	OrderID             int64   `json:"orderId"`
+	ClientOrderID       string  `json:"clientOrderId"`
+	TransactTime        int64   `json:"transactTime"`
+	Price               string  `json:"price"`
+	OrigQuantity        string  `json:"origQty"`
+	ExecutedQuantity    string  `json:"executedQty"`
+	СummulativeQuoteQty string `json:"cummulativeQuoteQty"`
+	Status              string  `json:"status"`
+	TimeInForce         string  `json:"timeInForce"`
+	Type                string  `json:"type"`
+	Side                string  `json:"side"`
+	Fills               []*Fill `json:"fills"`
 }
 
 // Fill may be returned in an array of fills in a CreateOrderResponse.
@@ -250,19 +251,20 @@ func (s *GetOrderService) Do(ctx context.Context, opts ...RequestOption) (res *O
 
 // Order define order info
 type Order struct {
-	Symbol           string `json:"symbol"`
-	OrderID          int64  `json:"orderId"`
-	ClientOrderID    string `json:"clientOrderId"`
-	Price            string `json:"price"`
-	OrigQuantity     string `json:"origQty"`
-	ExecutedQuantity string `json:"executedQty"`
-	Status           string `json:"status"`
-	TimeInForce      string `json:"timeInForce"`
-	Type             string `json:"type"`
-	Side             string `json:"side"`
-	StopPrice        string `json:"stopPrice"`
-	IcebergQuantity  string `json:"icebergQty"`
-	Time             int64  `json:"time"`
+	Symbol              string `json:"symbol"`
+	OrderID             int64  `json:"orderId"`
+	ClientOrderID       string `json:"clientOrderId"`
+	Price               string `json:"price"`
+	OrigQuantity        string `json:"origQty"`
+	ExecutedQuantity    string `json:"executedQty"`
+	Status              string `json:"status"`
+	TimeInForce         string `json:"timeInForce"`
+	Type                string `json:"type"`
+	Side                string `json:"side"`
+	StopPrice           string `json:"stopPrice"`
+	IcebergQuantity     string `json:"icebergQty"`
+	Time                int64  `json:"time"`
+	СummulativeQuoteQty string `json:"cummulativeQuoteQty"`
 }
 
 // ListOrdersService list all orders
