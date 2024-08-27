@@ -26,6 +26,7 @@ type BrokerRebateService struct {
 	page        *int
 	size        *int
 	recvWindow  *int64
+	timestamp   int64
 }
 
 // FuturesType sets futuresType (1: USDT Futures, 2: Coin Futures)
@@ -64,6 +65,11 @@ func (s *BrokerRebateService) RecvWindow(recvWindow int64) *BrokerRebateService 
 	return s
 }
 
+func (s *BrokerRebateService) Timestamp(timestamp int64) *BrokerRebateService {
+	s.timestamp = timestamp
+	return s
+}
+
 // Do sends the request
 func (s *BrokerRebateService) Do(ctx context.Context, opts ...RequestOption) (res []*RebateRecord, err error) {
 	r := &request{
@@ -74,6 +80,7 @@ func (s *BrokerRebateService) Do(ctx context.Context, opts ...RequestOption) (re
 	r.setParam("futuresType", s.futuresType)
 	r.setParam("startTime", s.startTime)
 	r.setParam("endTime", s.endTime)
+	r.setParam("timestamp", s.timestamp)
 	if s.page != nil {
 		r.setParam("page", *s.page)
 	}
