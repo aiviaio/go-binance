@@ -22,6 +22,7 @@ type BrokerRebateService struct {
 	page         *int
 	size         *int
 	recvWindow   *int64
+	timestamp    int64
 }
 
 // SubAccountId sets subAccountId
@@ -60,6 +61,12 @@ func (s *BrokerRebateService) RecvWindow(recvWindow int64) *BrokerRebateService 
 	return s
 }
 
+// Timestamp sets timestamp
+func (s *BrokerRebateService) Timestamp(timestamp int64) *BrokerRebateService {
+	s.timestamp = timestamp
+	return s
+}
+
 // Do sends the request
 func (s *BrokerRebateService) Do(ctx context.Context, opts ...RequestOption) (res []*RebateRecord, err error) {
 	r := &request{
@@ -67,6 +74,7 @@ func (s *BrokerRebateService) Do(ctx context.Context, opts ...RequestOption) (re
 		endpoint: "/sapi/v1/broker/rebate/recentRecord",
 		secType:  secTypeSigned,
 	}
+	r.setParam("timestamp", s.timestamp)
 	if s.subAccountID != nil {
 		r.setParam("subAccountId", *s.subAccountID)
 	}
