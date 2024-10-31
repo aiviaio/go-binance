@@ -269,6 +269,29 @@ func NewClient(apiKey, secretKey string) *Client {
 	}
 }
 
+type ClientOption func(c *Client)
+
+func WithHTTPClient(client *http.Client) ClientOption {
+	return func(c *Client) {
+		c.HTTPClient = client
+	}
+}
+
+func WithAuth(apiKey, secretKey string) ClientOption {
+	return func(c *Client) {
+		c.APIKey = apiKey
+		c.SecretKey = secretKey
+	}
+}
+
+func NewClientWithOpts(opts ...ClientOption) *Client {
+	c := NewClient("", "")
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
 // NewProxiedClient passing a proxy url
 func NewProxiedClient(apiKey, secretKey, proxyUrl string) *Client {
 	proxy, err := url.Parse(proxyUrl)
