@@ -217,9 +217,7 @@ func (s *WsLiveStreamsService) handleMessage(message []byte) {
 		id, _ := j.Get("id").Int64()
 		s.opsMutex.Lock()
 		op := s.ops[id]
-		if op != nil && op.stopC != nil {
-			close(op.stopC) // close the stop channel to prevent the operation from waiting indefinitely
-		}
+
 		delete(s.ops, id) // delete the operation from the map as it was not successful
 		s.opsMutex.Unlock()
 		if op != nil {
@@ -299,11 +297,12 @@ func (s *WsLiveStreamsService) handlerStreamMessage(stream string, data *simplej
 }
 
 func (s *WsLiveStreamsService) waitForStop(op *liveStreamOp) {
-	defer close(op.stopC)
-	if _, ok := <-op.stopC; ok {
-		if err := s.unsubscribe(op.Params...); err != nil {
-			s.errHandler(fmt.Errorf("unable to unsubscribe: %w", err))
-		}
+	if op.Method != common.LiveMethodSubscribe {
+		return
+	}
+	<-op.stopC
+	if err := s.unsubscribe(op.Params...); err != nil {
+		s.errHandler(fmt.Errorf("unable to unsubscribe: %w", err))
 	}
 }
 

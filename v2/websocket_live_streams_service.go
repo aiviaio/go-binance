@@ -202,9 +202,6 @@ func (s *WsLiveStreamsService) handleMessage(message []byte) {
 		id, _ := j.Get("id").Int64()
 		s.opsMutex.Lock()
 		op := s.ops[id]
-		if op != nil && op.stopC != nil {
-			close(op.stopC) // close the stop channel to prevent the operation from waiting indefinitely
-		}
 		delete(s.ops, id) // delete the operation from the map as it was not successful
 		s.opsMutex.Unlock()
 		if op != nil {
