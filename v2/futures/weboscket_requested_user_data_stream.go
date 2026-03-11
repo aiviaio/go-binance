@@ -146,7 +146,7 @@ func (s *WsRequestedUserDataStreamService) connect() error {
 		return fmt.Errorf("websocket already connected")
 	}
 
-	endpoint := fmt.Sprintf("%s/%s", getWsEndpoint(), s.listenKey)
+	endpoint := fmt.Sprintf("%s/%s", getWsPrivateEndpoint(), s.listenKey)
 	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("unable to dial websocket, endpoint: %s: %w", endpoint, err)

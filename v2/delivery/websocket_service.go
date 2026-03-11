@@ -424,6 +424,7 @@ type WsAllMarketTickerEvent []*WsMarketTickerEvent
 type WsAllMarketTickerHandler func(event WsAllMarketTickerEvent)
 
 // WsAllMarketTickerServe serve websocket that pushes price and funding rate for all markets.
+// Deprecated: !ticker@arr will be retired on 2026-03-26. Use WsAllMiniMarketTickerServe (!miniTicker@arr) or WsMarketTickerServe (<symbol>@ticker) instead.
 func WsAllMarketTickerServe(handler WsAllMarketTickerHandler, errHandler ErrHandler) (doneC, stopC chan struct{}, err error) {
 	endpoint := fmt.Sprintf("%s/!ticker@arr", getWsEndpoint())
 	cfg := newWsConfig(endpoint)

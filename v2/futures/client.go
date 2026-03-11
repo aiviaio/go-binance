@@ -86,12 +86,22 @@ const (
 	PositionSideTypeLong  PositionSideType = "LONG"
 	PositionSideTypeShort PositionSideType = "SHORT"
 
-	OrderTypeLimit              OrderType = "LIMIT"
-	OrderTypeMarket             OrderType = "MARKET"
-	OrderTypeStop               OrderType = "STOP"
-	OrderTypeStopMarket         OrderType = "STOP_MARKET"
-	OrderTypeTakeProfit         OrderType = "TAKE_PROFIT"
-	OrderTypeTakeProfitMarket   OrderType = "TAKE_PROFIT_MARKET"
+	OrderTypeLimit  OrderType = "LIMIT"
+	OrderTypeMarket OrderType = "MARKET"
+	// Deprecated: STOP orders are blocked on POST /fapi/v1/order since Dec 2, 2025.
+	// Use Algo Order API instead: https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/New-Algo-Order
+	OrderTypeStop OrderType = "STOP"
+	// Deprecated: STOP_MARKET orders are blocked on POST /fapi/v1/order since Dec 2, 2025.
+	// Use Algo Order API instead: https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/New-Algo-Order
+	OrderTypeStopMarket OrderType = "STOP_MARKET"
+	// Deprecated: TAKE_PROFIT orders are blocked on POST /fapi/v1/order since Dec 2, 2025.
+	// Use Algo Order API instead: https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/New-Algo-Order
+	OrderTypeTakeProfit OrderType = "TAKE_PROFIT"
+	// Deprecated: TAKE_PROFIT_MARKET orders are blocked on POST /fapi/v1/order since Dec 2, 2025.
+	// Use Algo Order API instead: https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/New-Algo-Order
+	OrderTypeTakeProfitMarket OrderType = "TAKE_PROFIT_MARKET"
+	// Deprecated: TRAILING_STOP_MARKET orders are blocked on POST /fapi/v1/order since Dec 2, 2025.
+	// Use Algo Order API instead: https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/New-Algo-Order
 	OrderTypeTrailingStopMarket OrderType = "TRAILING_STOP_MARKET"
 
 	TimeInForceTypeGTC TimeInForceType = "GTC" // Good Till Cancel
@@ -536,6 +546,56 @@ func (c *Client) NewGetIncomeHistoryService() *GetIncomeHistoryService {
 // NewHistoricalTradesService init listing trades service
 func (c *Client) NewHistoricalTradesService() *HistoricalTradesService {
 	return &HistoricalTradesService{c: c}
+}
+
+// NewCreateAlgoOrderService init creating algo order service
+func (c *Client) NewCreateAlgoOrderService() *CreateAlgoOrderService {
+	return &CreateAlgoOrderService{c: c}
+}
+
+// NewCancelAlgoOrderService init canceling algo order service
+func (c *Client) NewCancelAlgoOrderService() *CancelAlgoOrderService {
+	return &CancelAlgoOrderService{c: c}
+}
+
+// NewCancelAllAlgoOrdersService init canceling all algo orders service
+func (c *Client) NewCancelAllAlgoOrdersService() *CancelAllAlgoOrdersService {
+	return &CancelAllAlgoOrdersService{c: c}
+}
+
+// NewGetAlgoOrderService init getting algo order service
+func (c *Client) NewGetAlgoOrderService() *GetAlgoOrderService {
+	return &GetAlgoOrderService{c: c}
+}
+
+// NewListOpenAlgoOrdersService init listing open algo orders service
+func (c *Client) NewListOpenAlgoOrdersService() *ListOpenAlgoOrdersService {
+	return &ListOpenAlgoOrdersService{c: c}
+}
+
+// NewListAllAlgoOrdersService init listing all algo orders service
+func (c *Client) NewListAllAlgoOrdersService() *ListAllAlgoOrdersService {
+	return &ListAllAlgoOrdersService{c: c}
+}
+
+// NewTradingScheduleService init trading schedule service
+func (c *Client) NewTradingScheduleService() *TradingScheduleService {
+	return &TradingScheduleService{c: c}
+}
+
+// NewRPIDepthService init RPI depth service
+func (c *Client) NewRPIDepthService() *RPIDepthService {
+	return &RPIDepthService{c: c}
+}
+
+// NewSymbolADLRiskService init symbol ADL risk service
+func (c *Client) NewSymbolADLRiskService() *SymbolADLRiskService {
+	return &SymbolADLRiskService{c: c}
+}
+
+// NewInsuranceBalanceService init insurance balance service
+func (c *Client) NewInsuranceBalanceService() *InsuranceBalanceService {
+	return &InsuranceBalanceService{c: c}
 }
 
 // NewListAccountTradeService init account trade list service

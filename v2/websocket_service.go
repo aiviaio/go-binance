@@ -670,6 +670,7 @@ func WsMarketStatServe(symbol string, handler WsMarketStatHandler, errHandler Er
 type WsAllMarketsStatHandler func(event WsAllMarketsStatEvent)
 
 // WsAllMarketsStatServe serve websocket that push 24hr statistics for all market every second
+// Deprecated: !ticker@arr will be retired on 2026-03-26. Use WsAllMiniMarketsStatServe (!miniTicker@arr) instead.
 func WsAllMarketsStatServe(handler WsAllMarketsStatHandler, errHandler ErrHandler) (doneC, stopC chan struct{}, err error) {
 	endpoint := fmt.Sprintf("%s/!ticker@arr", getWsEndpoint())
 	cfg := newWsConfig(endpoint)

@@ -2,3 +2,4 @@ pkg/
 .idea
 *.iml
 .vscode
+v2/tests/.env
