@@ -518,7 +518,8 @@ type WsOrderUpdate struct {
 	ExecutionType     string          `json:"x"` // execution type for this event NEW/TRADE...
 	Status            string          `json:"X"` // order status
 	RejectReason      string          `json:"r"`
-	Id                int64           `json:"i"` // order id
+	Id                int64           `json:"i"` // order id (exchange order ID)
+	IgnoreI           int64           `json:"I"` // internal ID, ignore this field (prevents case-insensitive collision with "i")
 	LatestVolume      string          `json:"l"` // quantity for the latest trade
 	FilledVolume      string          `json:"z"`
 	LatestPrice       string          `json:"L"` // price for the latest trade
