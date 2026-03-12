@@ -1,53 +1,74 @@
 package futures
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 const (
-	userDataStreamMethodRequest = "REQUEST"
-
-	userDataStreamRequestBalance      = "@balance"
-	userDataStreamRequestTypePosition = "@position"
-	userDataStreamRequestTypeAccount  = "@account"
+	// WebSocket API methods for Futures
+	wsAPIMethodAccountBalance  = "account.balance"
+	wsAPIMethodAccountPosition = "account.position"
 
 	// userDataStreamRateLimit represent number of messages that can be sent per second
 	userDataStreamRateLimit = 4
 )
 
+// WsRequestedUserDataStreamService handles both:
+// 1. User Data Stream connection (for real-time events via listenKey)
+// 2. WebSocket API connection (for request-response queries like balance/position)
 type WsRequestedUserDataStreamService struct {
 	listenKey string
 	apiKey    string
+	secretKey string
 	keepAlive bool
 
-	conn        *websocket.Conn
-	connMutex   sync.Mutex
+	// User Data Stream connection (for events)
+	streamConn      *websocket.Conn
+	streamConnMutex sync.Mutex
+
+	// WebSocket API connection (for requests)
+	apiConn      *websocket.Conn
+	apiConnMutex sync.Mutex
+
 	rateLimiter *time.Ticker
+	requestID   int64
 
 	doneC        chan struct{}
 	stopC        chan struct{}
 	eventHandler WsUserDataHandler
 	errHandler   ErrHandler
 
-	respHandlers      map[int64]userDataStreamResultHandler
+	respHandlers      map[string]wsAPIResponseHandler
 	respHandlersMutex sync.Mutex
 }
 
-func NewWsRequestedUserDataStreamService(listenKey, apiKey string, keepAlive bool, errHandler ErrHandler) (service *WsRequestedUserDataStreamService, doneC, stopC chan struct{}) {
+type wsAPIResponseHandler struct {
+	tag     string
+	handler func(result json.RawMessage)
+}
+
+func NewWsRequestedUserDataStreamService(listenKey, apiKey, secretKey string, keepAlive bool, errHandler ErrHandler) (service *WsRequestedUserDataStreamService, doneC, stopC chan struct{}) {
 	service = &WsRequestedUserDataStreamService{
 		listenKey:    listenKey,
 		apiKey:       apiKey,
+		secretKey:    secretKey,
 		keepAlive:    keepAlive,
 		rateLimiter:  time.NewTicker(time.Second / userDataStreamRateLimit),
 		doneC:        make(chan struct{}),
 		stopC:        make(chan struct{}),
 		errHandler:   errHandler,
-		respHandlers: make(map[int64]userDataStreamResultHandler),
+		respHandlers: make(map[string]wsAPIResponseHandler),
 	}
 	doneC = service.doneC
 	stopC = service.stopC
@@ -56,6 +77,11 @@ func NewWsRequestedUserDataStreamService(listenKey, apiKey string, keepAlive boo
 
 func (s *WsRequestedUserDataStreamService) APIKey(apiKey string) *WsRequestedUserDataStreamService {
 	s.apiKey = apiKey
+	return s
+}
+
+func (s *WsRequestedUserDataStreamService) SecretKey(secretKey string) *WsRequestedUserDataStreamService {
+	s.secretKey = secretKey
 	return s
 }
 
@@ -69,14 +95,19 @@ func (s *WsRequestedUserDataStreamService) ListenKey(listenKey string) *WsReques
 	return s
 }
 
+// StartUserDataStream connects to User Data Stream for real-time events
 func (s *WsRequestedUserDataStreamService) StartUserDataStream(handler WsUserDataHandler) error {
-	if err := s.connect(); err != nil {
+	if err := s.connectUserDataStream(); err != nil {
+		return err
+	}
+	if err := s.connectWebSocketAPI(); err != nil {
 		return err
 	}
 	s.eventHandler = handler
 	return nil
 }
 
+// Response types for WebSocket API
 type WsUserDataPositionResponse struct {
 	Positions []WsUserDataPosition `json:"positions"`
 }
@@ -94,12 +125,25 @@ type WsUserDataPosition struct {
 	Symbol           string `json:"symbol"`
 	UnrealizedPnL    string `json:"unRealizedProfit"`
 	Side             string `json:"positionSide"`
+	UpdateTime       int64  `json:"updateTime"`
 }
+
 type WsUserDataPositionResponseHandler func(response *WsUserDataPositionResponse)
 
+// RequestUserPosition requests current position information via WebSocket API
 func (s *WsRequestedUserDataStreamService) RequestUserPosition(handler WsUserDataPositionResponseHandler) error {
-	wrappedHandler := userDataStreamResultHandlerWrapper(userDataStreamRequestTypePosition, handler, s.errHandler)
-	return s.sendStreamRequest(userDataStreamRequestTypePosition, wrappedHandler)
+	return s.sendAPIRequest(wsAPIMethodAccountPosition, nil, func(result json.RawMessage) {
+		if handler == nil {
+			return
+		}
+		// account.position returns array of positions directly
+		var positions []WsUserDataPosition
+		if err := json.Unmarshal(result, &positions); err != nil {
+			s.errHandler(fmt.Errorf("unable to unmarshal position response: %w", err))
+			return
+		}
+		handler(&WsUserDataPositionResponse{Positions: positions})
+	})
 }
 
 type WsUserDataBalanceResponse struct {
@@ -114,13 +158,25 @@ type WsUserDataBalance struct {
 	CrossUnPnl         string `json:"crossUnPnl"`
 	AvailableBalance   string `json:"availableBalance"`
 	MaxWithdrawAmount  string `json:"maxWithdrawAmount"`
+	UpdateTime         int64  `json:"updateTime"`
 }
 
 type WsUserDataBalanceResponseHandler func(response *WsUserDataBalanceResponse)
 
+// RequestUserBalance requests account balance via WebSocket API
 func (s *WsRequestedUserDataStreamService) RequestUserBalance(handler WsUserDataBalanceResponseHandler) error {
-	wrappedHandler := userDataStreamResultHandlerWrapper(userDataStreamRequestBalance, handler, s.errHandler)
-	return s.sendStreamRequest(userDataStreamRequestBalance, wrappedHandler)
+	return s.sendAPIRequest(wsAPIMethodAccountBalance, nil, func(result json.RawMessage) {
+		if handler == nil {
+			return
+		}
+		// account.balance returns array of balances directly
+		var balances []WsUserDataBalance
+		if err := json.Unmarshal(result, &balances); err != nil {
+			s.errHandler(fmt.Errorf("unable to unmarshal balance response: %w", err))
+			return
+		}
+		handler(&WsUserDataBalanceResponse{Balances: balances})
+	})
 }
 
 type WsUserDataBalanceAccountInfoResponse struct {
@@ -134,36 +190,73 @@ type WsUserDataBalanceAccountInfoResponse struct {
 type WsUserDataBalanceAccountInfoResponseHandler func(response *WsUserDataBalanceAccountInfoResponse)
 
 func (s *WsRequestedUserDataStreamService) RequestAccountInformation(handler WsUserDataBalanceAccountInfoResponseHandler) error {
-	wrappedHandler := userDataStreamResultHandlerWrapper(userDataStreamRequestTypeAccount, handler, s.errHandler)
-	return s.sendStreamRequest(userDataStreamRequestTypeAccount, wrappedHandler)
+	return s.sendAPIRequest("account.status", nil, func(result json.RawMessage) {
+		if handler == nil {
+			return
+		}
+		response := new(WsUserDataBalanceAccountInfoResponse)
+		if err := json.Unmarshal(result, response); err != nil {
+			s.errHandler(fmt.Errorf("unable to unmarshal account info response: %w", err))
+			return
+		}
+		handler(response)
+	})
 }
 
-func (s *WsRequestedUserDataStreamService) connect() error {
-	s.connMutex.Lock()
-	defer s.connMutex.Unlock()
+// connectUserDataStream connects to User Data Stream endpoint for real-time events
+func (s *WsRequestedUserDataStreamService) connectUserDataStream() error {
+	s.streamConnMutex.Lock()
+	defer s.streamConnMutex.Unlock()
 
-	if s.conn != nil {
-		return fmt.Errorf("websocket already connected")
+	if s.streamConn != nil {
+		return fmt.Errorf("user data stream already connected")
 	}
 
+	// User Data Stream uses private endpoint with listenKey
 	endpoint := fmt.Sprintf("%s/%s", getWsPrivateEndpoint(), s.listenKey)
 	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
 	if err != nil {
-		return fmt.Errorf("unable to dial websocket, endpoint: %s: %w", endpoint, err)
+		return fmt.Errorf("unable to dial user data stream, endpoint: %s: %w", endpoint, err)
 	}
 	conn.SetPingHandler(func(pingPayload string) error {
-		s.connMutex.Lock()
-		defer s.connMutex.Unlock()
-		<-s.rateLimiter.C
+		s.streamConnMutex.Lock()
+		defer s.streamConnMutex.Unlock()
 		return conn.WriteControl(websocket.PongMessage, []byte(pingPayload), time.Now().Add(WebsocketTimeout))
 	})
-	s.conn = conn
+	s.streamConn = conn
 
-	go s.readMessages()
+	go s.readStreamMessages()
 	return nil
 }
 
-func (s *WsRequestedUserDataStreamService) readMessages() {
+// connectWebSocketAPI connects to WebSocket API endpoint for request-response queries
+func (s *WsRequestedUserDataStreamService) connectWebSocketAPI() error {
+	s.apiConnMutex.Lock()
+	defer s.apiConnMutex.Unlock()
+
+	if s.apiConn != nil {
+		return fmt.Errorf("websocket API already connected")
+	}
+
+	// WebSocket API endpoint (no listenKey needed, uses signature auth)
+	endpoint := getWsAPIFuturesEndpoint()
+	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("unable to dial websocket API, endpoint: %s: %w", endpoint, err)
+	}
+	conn.SetPingHandler(func(pingPayload string) error {
+		s.apiConnMutex.Lock()
+		defer s.apiConnMutex.Unlock()
+		return conn.WriteControl(websocket.PongMessage, []byte(pingPayload), time.Now().Add(WebsocketTimeout))
+	})
+	s.apiConn = conn
+
+	go s.readAPIMessages()
+	return nil
+}
+
+// readStreamMessages reads messages from User Data Stream
+func (s *WsRequestedUserDataStreamService) readStreamMessages() {
 	silent := false
 	go func() {
 		select {
@@ -171,43 +264,52 @@ func (s *WsRequestedUserDataStreamService) readMessages() {
 			silent = true
 		case <-s.doneC:
 		}
-		s.conn.Close()
+		s.streamConnMutex.Lock()
+		if s.streamConn != nil {
+			s.streamConn.Close()
+		}
+		s.streamConnMutex.Unlock()
 	}()
 	for {
-		messageType, message, err := s.conn.ReadMessage()
+		messageType, message, err := s.streamConn.ReadMessage()
 		if err != nil {
 			if !silent {
-				s.errHandler(fmt.Errorf("unable to read message: %w", err))
+				s.errHandler(fmt.Errorf("unable to read stream message: %w", err))
 			}
 			return
 		}
 		if messageType == websocket.TextMessage {
-			s.handleMessage(message)
+			s.handleStreamEvent(message)
 		}
 	}
 }
 
-func (s *WsRequestedUserDataStreamService) handleMessage(message []byte) {
-	j, err := newJSON(message)
-	if err != nil {
-		s.errHandler(fmt.Errorf("unable to unmarshal JSON response: %w", err))
-		return
-	}
-
-	errorJSON, ok := j.CheckGet("error")
-	if ok {
-		code, _ := errorJSON.Get("code").Int()
-		msg, _ := errorJSON.Get("msg").String()
-		s.errHandler(fmt.Errorf("error response: code: %d, message: %s", code, msg))
-		return
-	}
-
-	// if 'id` is not present, the message is not a response but stream event
-	_, ok = j.CheckGet("id")
-	if !ok {
-		s.handleStreamEvent(message)
-	} else {
-		s.handleResponse(message)
+// readAPIMessages reads messages from WebSocket API
+func (s *WsRequestedUserDataStreamService) readAPIMessages() {
+	silent := false
+	go func() {
+		select {
+		case <-s.stopC:
+			silent = true
+		case <-s.doneC:
+		}
+		s.apiConnMutex.Lock()
+		if s.apiConn != nil {
+			s.apiConn.Close()
+		}
+		s.apiConnMutex.Unlock()
+	}()
+	for {
+		messageType, message, err := s.apiConn.ReadMessage()
+		if err != nil {
+			if !silent {
+				s.errHandler(fmt.Errorf("unable to read API message: %w", err))
+			}
+			return
+		}
+		if messageType == websocket.TextMessage {
+			s.handleAPIResponse(message)
+		}
 	}
 }
 
@@ -217,88 +319,141 @@ func (s *WsRequestedUserDataStreamService) handleStreamEvent(eventRaw []byte) {
 		s.errHandler(fmt.Errorf("unable to unmarshal stream event: %w", err))
 		return
 	}
-	s.eventHandler(event)
+	// For ALGO_UPDATE event, parse AlgoUpdate from "o" field
+	if event.Event == UserDataEventTypeAlgoUpdate {
+		var rawEvent struct {
+			O WsAlgoUpdate `json:"o"`
+		}
+		if err := json.Unmarshal(eventRaw, &rawEvent); err == nil {
+			event.AlgoUpdate = rawEvent.O
+		}
+	}
+	if s.eventHandler != nil {
+		s.eventHandler(event)
+	}
 }
 
-func (s *WsRequestedUserDataStreamService) handleResponse(responseRaw []byte) {
-	response := new(userDataStreamResponse)
-	if err := json.Unmarshal(responseRaw, response); err != nil {
-		s.errHandler(fmt.Errorf("unable to unmarshal stream event: %w", err))
+func (s *WsRequestedUserDataStreamService) handleAPIResponse(responseRaw []byte) {
+	// Check for error response
+	var errResp struct {
+		ID     string `json:"id"`
+		Status int    `json:"status"`
+		Error  *struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(responseRaw, &errResp); err == nil && errResp.Error != nil {
+		s.errHandler(fmt.Errorf("API error response: code: %d, message: %s", errResp.Error.Code, errResp.Error.Msg))
 		return
 	}
 
-	var respHandler userDataStreamResultHandler
-	var ok bool
+	// Parse successful response
+	var response wsAPIResponse
+	if err := json.Unmarshal(responseRaw, &response); err != nil {
+		s.errHandler(fmt.Errorf("unable to unmarshal API response: %w", err))
+		return
+	}
 
 	s.respHandlersMutex.Lock()
-	respHandler, ok = s.respHandlers[response.ID]
+	handler, ok := s.respHandlers[response.ID]
 	delete(s.respHandlers, response.ID)
 	s.respHandlersMutex.Unlock()
 
 	if !ok {
-		s.errHandler(fmt.Errorf("response handler not found, responseID: %d", response.ID))
+		// Response for unknown request, ignore
 		return
 	}
-	if response.Result == nil || len(response.Result) == 0 {
-		s.errHandler(fmt.Errorf("response result is empty, handlerTag: %s, responseID: %d", respHandler.tag, response.ID))
+
+	if response.Status != 200 {
+		s.errHandler(fmt.Errorf("API response status: %d for request %s", response.Status, response.ID))
 		return
 	}
-	respHandler.handler(&response.Result[0])
+
+	handler.handler(response.Result)
 }
 
-type userDataStreamRequest struct {
-	ID     int64       `json:"id"`
-	Method string      `json:"method"`
-	Params interface{} `json:"params"`
+// WebSocket API request/response types
+type wsAPIRequest struct {
+	ID     string                 `json:"id"`
+	Method string                 `json:"method"`
+	Params map[string]interface{} `json:"params,omitempty"`
 }
 
-type userDataStreamResponse struct {
-	ID     int64                  `json:"id"`
-	Result []userDataStreamResult `json:"result"`
+type wsAPIResponse struct {
+	ID     string          `json:"id"`
+	Status int             `json:"status"`
+	Result json.RawMessage `json:"result"`
 }
 
-type userDataStreamResult struct {
-	Req string          `json:"req"`
-	Res json.RawMessage `json:"res"`
+// generateSignature generates HMAC SHA256 signature for WebSocket API
+func (s *WsRequestedUserDataStreamService) generateSignature(params map[string]interface{}) string {
+	// Sort keys alphabetically
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Build query string
+	var parts []string
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, params[k]))
+	}
+	queryString := strings.Join(parts, "&")
+
+	// Generate HMAC SHA256
+	mac := hmac.New(sha256.New, []byte(s.secretKey))
+	mac.Write([]byte(queryString))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
-type userDataStreamResultHandler struct {
-	tag     string
-	handler func(result *userDataStreamResult)
+// nextRequestID generates next request ID
+func (s *WsRequestedUserDataStreamService) nextRequestID() string {
+	id := atomic.AddInt64(&s.requestID, 1)
+	return fmt.Sprintf("req-%d", id)
 }
 
-func (s *WsRequestedUserDataStreamService) sendStreamRequest(requestType string, handler userDataStreamResultHandler) error {
-	if s.eventHandler == nil {
-		return fmt.Errorf("data stream is not started")
+// sendAPIRequest sends a signed request to WebSocket API
+func (s *WsRequestedUserDataStreamService) sendAPIRequest(method string, extraParams map[string]interface{}, handler func(result json.RawMessage)) error {
+	if s.apiConn == nil {
+		return fmt.Errorf("websocket API is not connected")
 	}
 
-	endpoint := s.listenKey + requestType
-	op := &userDataStreamRequest{ID: time.Now().UnixNano(), Method: userDataStreamMethodRequest, Params: []string{endpoint}}
+	requestID := s.nextRequestID()
+	timestamp := time.Now().UnixMilli()
 
+	// Build params with authentication
+	params := map[string]interface{}{
+		"apiKey":    s.apiKey,
+		"timestamp": timestamp,
+	}
+	for k, v := range extraParams {
+		params[k] = v
+	}
+
+	// Generate signature
+	params["signature"] = s.generateSignature(params)
+
+	req := wsAPIRequest{
+		ID:     requestID,
+		Method: method,
+		Params: params,
+	}
+
+	// Register handler
 	s.respHandlersMutex.Lock()
-	s.respHandlers[op.ID] = handler
+	s.respHandlers[requestID] = wsAPIResponseHandler{
+		tag:     method,
+		handler: handler,
+	}
 	s.respHandlersMutex.Unlock()
 
+	// Rate limit
 	<-s.rateLimiter.C
-	s.connMutex.Lock()
-	defer s.connMutex.Unlock()
-	return s.conn.WriteJSON(op)
-}
 
-func userDataStreamResultHandlerWrapper[T any](tag string, handler func(*T), errHandler ErrHandler) userDataStreamResultHandler {
-	return userDataStreamResultHandler{
-		tag: tag,
-		handler: func(result *userDataStreamResult) {
-			if handler == nil {
-				return
-			}
-			response := new(T)
-			err := json.Unmarshal(result.Res, &response)
-			if err != nil {
-				errHandler(fmt.Errorf("unable to unmarshal response: %w", err))
-				return
-			}
-			handler(response)
-		},
-	}
+	// Send request
+	s.apiConnMutex.Lock()
+	defer s.apiConnMutex.Unlock()
+	return s.apiConn.WriteJSON(req)
 }

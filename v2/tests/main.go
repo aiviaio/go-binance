@@ -8,7 +8,7 @@ import (
 
 func main() {
 	// Parse command line flags
-	testName := flag.String("test", "all", "Test to run: all, spot-ws, spot-orders, spot-balance, futures-ws, futures-market, futures-orders, futures-balance, futures-algo")
+	testName := flag.String("test", "all", "Test to run: all, spot-ws, spot-orders, spot-balance, futures-ws, futures-market, futures-orders, futures-balance, futures-algo, futures-algo-ws")
 	flag.Parse()
 
 	// Load config and enable testnet
@@ -40,6 +40,8 @@ func main() {
 		TestFuturesBalance(cfg)
 	case "futures-algo":
 		TestFuturesAlgoOrders(cfg)
+	case "futures-algo-ws":
+		TestFuturesAlgoUpdateStream(cfg)
 	case "futures-trades":
 		TestFuturesHistoricalTrades(cfg)
 	case "futures-info":
@@ -71,5 +73,6 @@ func runAllTests(cfg *Config) {
 	TestFuturesUserDataStream(cfg)
 	TestFuturesOrders(cfg)
 	TestFuturesAlgoOrders(cfg)
+	TestFuturesAlgoUpdateStream(cfg)
 	TestFuturesMarketData(cfg)
 }

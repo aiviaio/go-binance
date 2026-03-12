@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.1.49 (2026-03-12)
+
+### Bug Fixes
+- **Futures WebSocket API**: Fixed `WsRequestedUserDataStreamService` to use correct WebSocket API methods (`account.balance`, `account.position`) instead of invalid `REQUEST` method
+- **Futures WebSocket API endpoint**: Fixed endpoint URL from `ws-api/v3` to `ws-fapi/v1`
+- **Futures WebSocket architecture**: Now uses two separate connections:
+  - User Data Stream (`fstream.binance.com/private/ws/<listenKey>`) for real-time events
+  - WebSocket API (`ws-fapi.binance.com/ws-fapi/v1`) for request-response queries with signature authentication
+
+### New Features
+- **ALGO_UPDATE event parsing**: Added proper parsing for `ALGO_UPDATE` WebSocket event in User Data Stream
+- **`UserDataEventTypeAlgoUpdate`**: New constant for algo order update events
+- **Integration test**: Added `TestFuturesAlgoUpdateStream` for ALGO_UPDATE event verification
+
+### Breaking Changes
+- `NewWsRequestedUserDataStreamService()` now requires `secretKey` parameter for WebSocket API signature authentication
+
 ## v2.1.48 (2026-03-11)
 
 ### Breaking Changes

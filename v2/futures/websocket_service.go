@@ -22,6 +22,10 @@ const (
 	baseWsPrivateMainUrl   = "wss://fstream.binance.com/private/ws"
 	baseWsMarketTestnetUrl = "wss://stream.binancefuture.com/market/ws"
 	baseWsPrivateTestnetUrl = "wss://stream.binancefuture.com/private/ws"
+
+	// WebSocket API for Futures (request-response API with signature auth)
+	baseWsAPIFuturesMainUrl    = "wss://ws-fapi.binance.com/ws-fapi/v1"
+	baseWsAPIFuturesTestnetUrl = "wss://testnet.binancefuture.com/ws-fapi/v1"
 )
 
 var (
@@ -56,6 +60,14 @@ func getWsPrivateEndpoint() string {
 		return baseWsPrivateTestnetUrl
 	}
 	return baseWsPrivateMainUrl
+}
+
+// getWsAPIFuturesEndpoint returns the WebSocket API endpoint for Futures
+func getWsAPIFuturesEndpoint() string {
+	if UseTestnet {
+		return baseWsAPIFuturesTestnetUrl
+	}
+	return baseWsAPIFuturesMainUrl
 }
 
 // getCombinedEndpoint return the base endpoint of the combined stream according the UseTestnet flag
@@ -849,28 +861,37 @@ type WsUserDataEvent struct {
 	AccountUpdate       WsAccountUpdate       `json:"a"`
 	OrderTradeUpdate    WsOrderTradeUpdate    `json:"o"`
 	AccountConfigUpdate WsAccountConfigUpdate `json:"ac"`
-	AlgoUpdate          WsAlgoUpdate          `json:"ao"`
+	AlgoUpdate          WsAlgoUpdate          `json:"-"` // Parsed from "o" field when Event == ALGO_UPDATE
 }
 
-// WsAlgoUpdate define algo order update (new event since Dec 2025)
+// WsAlgoUpdate define algo order update for ALGO_UPDATE event
+// See: https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams/Event-Algo-Order-Update
 type WsAlgoUpdate struct {
-	AlgoID        int64            `json:"ai"`
-	ClientAlgoID  string           `json:"ca"`
-	Symbol        string           `json:"s"`
-	Side          SideType         `json:"S"`
-	PositionSide  PositionSideType `json:"ps"`
-	AlgoType      string           `json:"at"`
-	OrderType     OrderType        `json:"ot"`
-	AlgoStatus    string           `json:"as"`
-	Quantity      string           `json:"q"`
-	TriggerPrice  string           `json:"tp"`
-	Price         string           `json:"p"`
-	WorkingType   WorkingType      `json:"wt"`
-	ActivatePrice string           `json:"AP"`
-	CallbackRate  string           `json:"cr"`
-	CreateTime    int64            `json:"ct"`
-	UpdateTime    int64            `json:"ut"`
-	TriggerTime   int64            `json:"tt"`
+	ClientAlgoID     string           `json:"caid"` // Client Algo Id
+	AlgoID           int64            `json:"aid"`  // Algo Id
+	AlgoType         string           `json:"at"`   // Algo Type: CONDITIONAL
+	OrderType        OrderType        `json:"o"`    // Order Type: TAKE_PROFIT, STOP, etc.
+	Symbol           string           `json:"s"`    // Symbol
+	Side             SideType         `json:"S"`    // Side
+	PositionSide     PositionSideType `json:"ps"`   // Position Side
+	TimeInForce      TimeInForceType  `json:"f"`    // Time in force
+	Quantity         string           `json:"q"`    // Quantity
+	AlgoStatus       string           `json:"X"`    // Algo status: NEW, CANCELED, TRIGGERING, TRIGGERED, FINISHED, REJECTED, EXPIRED
+	OrderID          string           `json:"ai"`   // Order id in matching engine (when triggered)
+	AvgPrice         string           `json:"ap"`   // Avg fill price in matching engine
+	ExecutedQty      string           `json:"aq"`   // Executed quantity in matching engine
+	ActualOrderType  string           `json:"act"`  // Actual order type in matching engine
+	TriggerPrice     string           `json:"tp"`   // Trigger price
+	Price            string           `json:"p"`    // Order Price
+	StpMode          string           `json:"V"`    // STP mode
+	WorkingType      WorkingType      `json:"wt"`   // Working type: CONTRACT_PRICE, MARK_PRICE
+	PriceMatchMode   string           `json:"pm"`   // Price match mode
+	ClosePosition    bool             `json:"cp"`   // If Close-All
+	PriceProtection  bool             `json:"pP"`   // If price protection is turned on
+	ReduceOnly       bool             `json:"R"`    // Is this reduce only
+	TriggerTime      int64            `json:"tt"`   // Trigger time
+	GoodTillDate     int64            `json:"gtd"`  // Good till time for GTD time in force
+	FailReason       string           `json:"rm"`   // Algo order failed reason
 }
 
 // WsAccountUpdate define account update
@@ -946,9 +967,9 @@ type WsAccountConfigUpdate struct {
 type WsUserDataHandler func(event *WsUserDataEvent)
 
 // WsUserDataServe serve user data handler with listen key
-// Uses new /private endpoint structure
+// Uses new /private endpoint structure with query parameter
 func WsUserDataServe(listenKey string, handler WsUserDataHandler, errHandler ErrHandler) (doneC, stopC chan struct{}, err error) {
-	endpoint := fmt.Sprintf("%s/%s", getWsPrivateEndpoint(), listenKey)
+	endpoint := fmt.Sprintf("%s?listenKey=%s", getWsPrivateEndpoint(), listenKey)
 	cfg := newWsConfig(endpoint)
 	wsHandler := func(message []byte) {
 		event := new(WsUserDataEvent)
@@ -956,6 +977,15 @@ func WsUserDataServe(listenKey string, handler WsUserDataHandler, errHandler Err
 		if err != nil {
 			errHandler(err)
 			return
+		}
+		// For ALGO_UPDATE event, parse AlgoUpdate from "o" field
+		if event.Event == UserDataEventTypeAlgoUpdate {
+			var rawEvent struct {
+				O WsAlgoUpdate `json:"o"`
+			}
+			if err := json.Unmarshal(message, &rawEvent); err == nil {
+				event.AlgoUpdate = rawEvent.O
+			}
 		}
 		handler(event)
 	}

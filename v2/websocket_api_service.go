@@ -129,6 +129,13 @@ func (c *WsAPIClient) readMessages() {
 					wsAPIJson.Unmarshal(message, &event.BalanceUpdate)
 				case UserDataEventTypeExecutionReport:
 					wsAPIJson.Unmarshal(message, &event.OrderUpdate)
+				case UserDataEventTypeOutboundAccountPosition:
+					// Spot outboundAccountPosition has 'B' field for balances
+					var temp struct {
+						Balances []WsAccountUpdate `json:"B"`
+					}
+					wsAPIJson.Unmarshal(message, &temp)
+					event.AccountUpdate = temp.Balances
 				case UserDataEventTypeListStatus:
 					wsAPIJson.Unmarshal(message, &event.OCOUpdate)
 				}
