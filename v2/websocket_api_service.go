@@ -19,7 +19,7 @@ var wsAPIJson = jsoniter.ConfigCompatibleWithStandardLibrary
 const (
 	// WebSocket API endpoint for Spot
 	wsAPIBaseURL        = "wss://ws-api.binance.com:443/ws-api/v3"
-	wsAPITestnetBaseURL = "wss://testnet.binance.vision/ws-api/v3"
+	wsAPITestnetBaseURL = "wss://ws-api.testnet.binance.vision/ws-api/v3"
 )
 
 // getWsAPIEndpoint returns the WebSocket API endpoint based on testnet flag
@@ -94,6 +94,61 @@ func (c *WsAPIClient) readMessages() {
 				return
 			}
 
+			// First check if it's a subscription event (has "subscriptionId" and "event" fields)
+			// Format: {"subscriptionId":0,"event":{"e":"executionReport",...}}
+			var subscriptionEventCheck struct {
+				SubscriptionID *int               `json:"subscriptionId"`
+				Event          stdjson.RawMessage `json:"event"`
+			}
+			unmarshalErr := wsAPIJson.Unmarshal(message, &subscriptionEventCheck)
+			hasSubscriptionID := subscriptionEventCheck.SubscriptionID != nil
+			hasEvent := len(subscriptionEventCheck.Event) > 2
+			if unmarshalErr == nil && hasSubscriptionID && hasEvent {
+				// This is a subscription event, parse it
+				// Use standard json for parsing to avoid json-iterator issues with mixed types
+				var eventType struct {
+					Event string `json:"e"`
+				}
+				stdjson.Unmarshal(subscriptionEventCheck.Event, &eventType)
+				if eventType.Event != "" {
+					// Create event and set type manually (avoid full unmarshal due to field conflicts)
+					event := &WsUserDataEvent{
+						Event: UserDataEventType(eventType.Event),
+					}
+
+					// Parse time field
+					var timeField struct {
+						Time int64 `json:"E"`
+					}
+					stdjson.Unmarshal(subscriptionEventCheck.Event, &timeField)
+					event.Time = timeField.Time
+
+					// Handle specific event types
+					switch UserDataEventType(eventType.Event) {
+					case UserDataEventTypeBalanceUpdate:
+						stdjson.Unmarshal(subscriptionEventCheck.Event, &event.BalanceUpdate)
+					case UserDataEventTypeExecutionReport:
+						stdjson.Unmarshal(subscriptionEventCheck.Event, &event.OrderUpdate)
+					case UserDataEventTypeOutboundAccountPosition:
+						// Spot outboundAccountPosition has 'B' field for balances
+						var temp struct {
+							Balances []WsAccountUpdate `json:"B"`
+						}
+						stdjson.Unmarshal(subscriptionEventCheck.Event, &temp)
+						event.AccountUpdate = temp.Balances
+					case UserDataEventTypeListStatus:
+						stdjson.Unmarshal(subscriptionEventCheck.Event, &event.OCOUpdate)
+					}
+
+					select {
+					case c.userDataChan <- event:
+					default:
+						// Channel full, skip event
+					}
+				}
+				continue
+			}
+
 			// Try to parse as API response (has "id" field)
 			var resp struct {
 				ID string `json:"id"`
@@ -110,7 +165,7 @@ func (c *WsAPIClient) readMessages() {
 				continue
 			}
 
-			// Try to parse as user data event (has "e" field for event type)
+			// Fallback: Try to parse as direct user data event (has "e" field for event type)
 			var eventType struct {
 				Event string `json:"e"`
 			}

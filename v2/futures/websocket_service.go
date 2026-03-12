@@ -856,7 +856,7 @@ type WsUserDataEvent struct {
 	Event               UserDataEventType     `json:"e"`
 	Time                int64                 `json:"E"`
 	CrossWalletBalance  string                `json:"cw"`
-	MarginCallPositions []WsPosition          `json:"p"`
+	MarginCallPositions []WsPosition          `json:"-"` // Parsed separately for MARGIN_CALL events
 	TransactionTime     int64                 `json:"T"`
 	AccountUpdate       WsAccountUpdate       `json:"a"`
 	OrderTradeUpdate    WsOrderTradeUpdate    `json:"o"`
@@ -985,6 +985,15 @@ func WsUserDataServe(listenKey string, handler WsUserDataHandler, errHandler Err
 			}
 			if err := json.Unmarshal(message, &rawEvent); err == nil {
 				event.AlgoUpdate = rawEvent.O
+			}
+		}
+		// For MARGIN_CALL event, parse MarginCallPositions from "p" field (array)
+		if event.Event == UserDataEventTypeMarginCall {
+			var rawEvent struct {
+				P []WsPosition `json:"p"`
+			}
+			if err := json.Unmarshal(message, &rawEvent); err == nil {
+				event.MarginCallPositions = rawEvent.P
 			}
 		}
 		handler(event)
