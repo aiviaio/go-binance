@@ -115,7 +115,7 @@ type WsUserDataPositionResponse struct {
 type WsUserDataPosition struct {
 	EntryPrice       string `json:"entryPrice"`
 	MarginType       string `json:"marginType"`
-	IsAutoAddMargin  bool   `json:"isAutoAddMargin"`
+	IsAutoAddMargin  string `json:"isAutoAddMargin"`
 	IsolatedMargin   string `json:"isolatedMargin"`
 	Leverage         string `json:"leverage"`
 	LiquidationPrice string `json:"liquidationPrice"`
