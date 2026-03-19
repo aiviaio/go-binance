@@ -147,6 +147,13 @@ func (s *WsLiveStreamsService) unsubscribe(streams ...string) error {
 	s.connMutex.Lock()
 	defer s.connMutex.Unlock()
 
+	// Remove handlers for unsubscribed streams
+	s.wsHandlersMutex.Lock()
+	for _, stream := range streams {
+		delete(s.wsHandlers, stream)
+	}
+	s.wsHandlersMutex.Unlock()
+
 	op := &liveStreamOp{ID: time.Now().UnixMilli(), Method: common.LiveMethodUnsubscribe, Params: streams}
 	s.opsMutex.Lock()
 	s.ops[op.ID] = op
