@@ -1001,13 +1001,13 @@ func (s *UniversalTransferHistoryService) universalTransferHistory(ctx context.C
 	if s.toId != nil {
 		r.setParam("toId", *s.toId)
 	}
-	if s.fromId != nil {
+	if s.clientTranId != nil {
 		r.setParam("clientTranId", *s.clientTranId)
 	}
 	if s.startTime != nil {
 		r.setParam("startTime", *s.startTime)
 	}
-	if s.startTime != nil {
+	if s.endTime != nil {
 		r.setParam("endTime", *s.endTime)
 	}
 

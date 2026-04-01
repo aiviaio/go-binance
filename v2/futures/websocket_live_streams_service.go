@@ -74,6 +74,27 @@ func (s *WsLiveStreamsService) WsAllMarketsStatServe(handler WsAllMarketTickerHa
 	return s.subscribe(common.LiveStreamAllMarketTickers)
 }
 
+// WsAllMiniMarketsStatServe serve websocket that push mini 24hr statistics for all market every second
+func (s *WsLiveStreamsService) WsAllMiniMarketsStatServe(handler WsAllMiniMarketTickerHandler) (stopC chan<- struct{}, err error) {
+	if err = s.connectIfNotConnected(); err != nil {
+		return
+	}
+	wsHandler := func(message []byte) {
+		var event WsAllMiniMarketTickerEvent
+		err = json.Unmarshal(message, &event)
+		if err != nil {
+			s.errHandler(fmt.Errorf("unable to unmarshal mini ticker event: %w", err))
+			return
+		}
+		handler(event)
+	}
+	if err = s.addWsHandler(common.LiveStreamAllMiniMarketTickers, wsHandler); err != nil {
+		return
+	}
+
+	return s.subscribe(common.LiveStreamAllMiniMarketTickers)
+}
+
 // WsAggTradeServe serve websocket aggregate handler with a symbol
 func (s *WsLiveStreamsService) WsAggTradeServe(symbol string, handler WsAggTradeHandler) (stopC chan<- struct{}, err error) {
 	if err = s.connectIfNotConnected(); err != nil {

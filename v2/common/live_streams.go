@@ -1,7 +1,8 @@
 package common
 
 const (
-	LiveStreamAllMarketTickers = "!ticker@arr"
+	LiveStreamAllMarketTickers     = "!ticker@arr"
+	LiveStreamAllMiniMarketTickers = "!miniTicker@arr"
 	LiveStreamDepth            = "@depth"
 	LiveStreamAggTrade         = "@aggTrade"
 	LiveStreamAvgPrice         = "@avgPrice"
