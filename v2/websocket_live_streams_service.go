@@ -73,6 +73,28 @@ func (s *WsLiveStreamsService) WsAllMarketsStatServe(handler WsAllMarketsStatHan
 	return s.subscribe(common.LiveStreamAllMarketTickers)
 }
 
+// WsAllMarketsRollingWindowServe serve websocket that push rolling window (1d) statistics for all market every second
+// This replaces the deprecated !ticker@arr stream with !ticker_1d@arr
+func (s *WsLiveStreamsService) WsAllMarketsRollingWindowServe(handler WsAllMarketsStatHandler) (stopC chan<- struct{}, err error) {
+	if err = s.connectIfNotConnected(); err != nil {
+		return
+	}
+	wsHandler := func(message []byte) {
+		var event WsAllMarketsStatEvent
+		err = json.Unmarshal(message, &event)
+		if err != nil {
+			s.errHandler(fmt.Errorf("unable to unmarshal rolling window ticker event: %w", err))
+			return
+		}
+		handler(event)
+	}
+	if err = s.addWsHandler(common.LiveStreamAllMarketTickers1d, wsHandler); err != nil {
+		return
+	}
+
+	return s.subscribe(common.LiveStreamAllMarketTickers1d)
+}
+
 // WsAllMiniMarketsStatServe serve websocket that push mini 24hr statistics for all market every second
 func (s *WsLiveStreamsService) WsAllMiniMarketsStatServe(handler WsAllMiniMarketsStatServeHandler) (stopC chan<- struct{}, err error) {
 	if err = s.connectIfNotConnected(); err != nil {
