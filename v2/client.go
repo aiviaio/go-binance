@@ -362,7 +362,9 @@ func (c *Client) parseRequest(r *request, opts ...RequestOption) (err error) {
 	}
 
 	fullURL := fmt.Sprintf("%s%s", c.BaseURL, r.endpoint)
-	if r.recvWindow <= 0 && c.DefaultRecvWindow > 0 {
+	// recvWindow is only a signed-endpoint parameter. Public endpoints (e.g.
+	// /api/v3/time) reject any extra params with -1101, so we gate the default.
+	if r.secType == secTypeSigned && r.recvWindow <= 0 && c.DefaultRecvWindow > 0 {
 		r.recvWindow = c.DefaultRecvWindow
 	}
 	if r.recvWindow > 0 {
