@@ -336,6 +336,10 @@ type Client struct {
 	Debug               bool
 	Logger              *log.Logger
 	TimeOffset          int64
+	// DefaultRecvWindow, if > 0, is applied to every request that doesn't set
+	// its own recvWindow via WithRecvWindow. Lets callers raise the window
+	// once (e.g. for long-running sync loops where clock drift accumulates).
+	DefaultRecvWindow   int64
 	do                  doFunc
 	UsedRequestWeight   int64
 	UsedOrdersWeight10s int64
@@ -358,6 +362,9 @@ func (c *Client) parseRequest(r *request, opts ...RequestOption) (err error) {
 	}
 
 	fullURL := fmt.Sprintf("%s%s", c.BaseURL, r.endpoint)
+	if r.recvWindow <= 0 && c.DefaultRecvWindow > 0 {
+		r.recvWindow = c.DefaultRecvWindow
+	}
 	if r.recvWindow > 0 {
 		r.setParam(recvWindowKey, r.recvWindow)
 	}

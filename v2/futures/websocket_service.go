@@ -17,11 +17,24 @@ const (
 	baseCombinedMainURL    = "wss://fstream.binance.com/stream?streams="
 	baseCombinedTestnetURL = "wss://stream.binancefuture.com/stream?streams="
 
-	// New URL structure
+	// New URL structure: traffic is split by category (public / market / private).
+	// - public  : high-frequency public market data (@trade)
+	// - market  : regular market data (@kline, @ticker, @depth, @aggTrade, @markPrice, etc.)
+	// - private : user data streams (listenKey)
+	baseWsPublicMainUrl    = "wss://fstream.binance.com/public/ws"
 	baseWsMarketMainUrl    = "wss://fstream.binance.com/market/ws"
 	baseWsPrivateMainUrl   = "wss://fstream.binance.com/private/ws"
+	baseWsPublicTestnetUrl = "wss://stream.binancefuture.com/public/ws"
 	baseWsMarketTestnetUrl = "wss://stream.binancefuture.com/market/ws"
 	baseWsPrivateTestnetUrl = "wss://stream.binancefuture.com/private/ws"
+
+	// Combined stream URLs on the new category-split architecture. The server
+	// accepts either `/stream?streams=a/b/c` (comma-list) or the per-connection
+	// SUBSCRIBE message. We connect without `?streams=` and subscribe dynamically.
+	baseCombinedMarketMainURL    = "wss://fstream.binance.com/market/stream"
+	baseCombinedPublicMainURL    = "wss://fstream.binance.com/public/stream"
+	baseCombinedMarketTestnetURL = "wss://stream.binancefuture.com/market/stream"
+	baseCombinedPublicTestnetURL = "wss://stream.binancefuture.com/public/stream"
 
 	// WebSocket API for Futures (request-response API with signature auth)
 	baseWsAPIFuturesMainUrl    = "wss://ws-fapi.binance.com/ws-fapi/v1"
@@ -54,12 +67,37 @@ func getWsMarketEndpoint() string {
 	return baseWsMarketMainUrl
 }
 
+// getWsPublicEndpoint returns the high-frequency public market data endpoint (@trade).
+func getWsPublicEndpoint() string {
+	if UseTestnet {
+		return baseWsPublicTestnetUrl
+	}
+	return baseWsPublicMainUrl
+}
+
 // getWsPrivateEndpoint returns the private/user data WebSocket endpoint
 func getWsPrivateEndpoint() string {
 	if UseTestnet {
 		return baseWsPrivateTestnetUrl
 	}
 	return baseWsPrivateMainUrl
+}
+
+// getCombinedMarketEndpoint returns the new combined-stream endpoint for market data.
+// Clients SUBSCRIBE dynamically; the URL is the base /market/stream with no ?streams= suffix.
+func getCombinedMarketEndpoint() string {
+	if UseTestnet {
+		return baseCombinedMarketTestnetURL
+	}
+	return baseCombinedMarketMainURL
+}
+
+// getCombinedPublicEndpoint returns the new combined-stream endpoint for high-frequency public data.
+func getCombinedPublicEndpoint() string {
+	if UseTestnet {
+		return baseCombinedPublicTestnetURL
+	}
+	return baseCombinedPublicMainURL
 }
 
 // getWsAPIFuturesEndpoint returns the WebSocket API endpoint for Futures
