@@ -213,6 +213,7 @@ func (s *ListWithdrawsService) Do(ctx context.Context) (res []*Withdraw, err err
 // Withdraw represents a single withdraw entry.
 type Withdraw struct {
 	Address         string `json:"address"`
+	AddressTag      string `json:"addressTag"`
 	Amount          string `json:"amount"`
 	ApplyTime       string `json:"applyTime"`
 	Coin            string `json:"coin"`
@@ -225,5 +226,6 @@ type Withdraw struct {
 	ConfirmNo       int32  `json:"confirmNo"`
 	Info            string `json:"info"`
 	TxID            string `json:"txId"`
+	TxKey           string `json:"txKey"`
 	WalletType      int    `json:"walletType"`
 }
