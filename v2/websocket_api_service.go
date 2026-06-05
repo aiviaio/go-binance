@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	stdjson "encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +22,13 @@ const (
 	// WebSocket API endpoint for Spot
 	wsAPIBaseURL        = "wss://ws-api.binance.com:443/ws-api/v3"
 	wsAPITestnetBaseURL = "wss://ws-api.testnet.binance.vision/ws-api/v3"
+
+	// Ping/pong intervals for connection health monitoring.
+	// We send a ping every 30s; if no pong (or any message) arrives within
+	// 60s the read deadline fires and ReadMessage returns an error, which
+	// surfaces through errHandler and lets the caller reconnect.
+	wsAPIPingInterval = 30 * time.Second
+	wsAPIReadDeadline = 60 * time.Second
 )
 
 // getWsAPIEndpoint returns the WebSocket API endpoint based on testnet flag
@@ -40,15 +49,49 @@ type WsAPIClient struct {
 	handlers       map[string]chan []byte
 	handlerMu      sync.RWMutex
 	done           chan struct{}
+	closeOnce      sync.Once
 	errHandler     ErrHandler
 	userDataChan   chan *WsUserDataEvent
 	subscriptionID int
+	// lastMessageTime is updated on every received message or pong frame,
+	// allowing callers to detect stale connections via LastMessageTime().
+	lastMessageTime atomic.Value // stores time.Time
 }
 
-// NewWsAPIClient creates a new WebSocket API client
+// NewWsAPIClient creates a new WebSocket API client with built-in ping/pong
+// health monitoring. If the connection goes silent for longer than
+// wsAPIReadDeadline the read will error out and errHandler is called.
+// It connects directly (no proxy) via websocket.DefaultDialer.
 func NewWsAPIClient(apiKey, secretKey string, errHandler ErrHandler) (*WsAPIClient, error) {
+	return NewWsAPIClientWithProxy(apiKey, secretKey, "", errHandler)
+}
+
+// NewWsAPIClientWithProxy is like NewWsAPIClient but routes the WebSocket
+// handshake through the given HTTP proxy (format: http://user:pass@host:port).
+// This matters in production: opening every account's WS directly from one pod
+// IP trips Binance's per-IP connection limits (mass "use of closed network
+// connection" disconnects) and the API key IP-whitelist check (ip_forbidden).
+// Routing through the rotating proxy spreads connections across exit IPs and
+// exits from whitelisted IPs. A WSS handshake goes over an HTTP CONNECT tunnel,
+// which keeps a single upstream TCP connection alive for the socket's lifetime,
+// so the exit IP stays stable — the proxy does not rotate it mid-connection.
+// An empty proxyURL falls back to a direct connection via DefaultDialer.
+func NewWsAPIClientWithProxy(apiKey, secretKey, proxyURL string, errHandler ErrHandler) (*WsAPIClient, error) {
 	endpoint := getWsAPIEndpoint()
-	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+
+	dialer := websocket.DefaultDialer
+	if proxyURL != "" {
+		parsed, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse proxy URL: %w", err)
+		}
+		dialer = &websocket.Dialer{
+			Proxy:            http.ProxyURL(parsed),
+			HandshakeTimeout: 45 * time.Second,
+		}
+	}
+
+	conn, _, err := dialer.Dial(endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to WebSocket API: %w", err)
 	}
@@ -62,25 +105,89 @@ func NewWsAPIClient(apiKey, secretKey string, errHandler ErrHandler) (*WsAPIClie
 		errHandler:   errHandler,
 		userDataChan: make(chan *WsUserDataEvent, 500),
 	}
+	client.lastMessageTime.Store(time.Now())
+
+	// Pong handler: every time the server responds to our ping, extend the
+	// read deadline so that ReadMessage keeps working.
+	client.conn.SetPongHandler(func(appData string) error {
+		client.lastMessageTime.Store(time.Now())
+		return client.conn.SetReadDeadline(time.Now().Add(wsAPIReadDeadline))
+	})
+
+	// Set initial read deadline — if no data arrives at all within this
+	// window (e.g. silent TCP death before the first ping/pong cycle),
+	// ReadMessage will return a timeout error.
+	_ = client.conn.SetReadDeadline(time.Now().Add(wsAPIReadDeadline))
 
 	go client.readMessages()
+	go client.pingLoop()
 
 	return client, nil
 }
 
-// UserDataChan returns channel for receiving user data events
+// UserDataChan returns channel for receiving user data events.
+// The channel is closed when the underlying connection is lost or Close() is called.
 func (c *WsAPIClient) UserDataChan() <-chan *WsUserDataEvent {
 	return c.userDataChan
 }
 
-// Close closes the WebSocket connection
-func (c *WsAPIClient) Close() error {
-	close(c.done)
-	return c.conn.Close()
+// LastMessageTime returns the time of the last received message or pong.
+// Callers can use this as a secondary health check.
+func (c *WsAPIClient) LastMessageTime() time.Time {
+	if t, ok := c.lastMessageTime.Load().(time.Time); ok {
+		return t
+	}
+	return time.Time{}
 }
 
-// readMessages reads messages from WebSocket and dispatches to handlers
+// Close closes the WebSocket connection. Safe to call multiple times.
+func (c *WsAPIClient) Close() error {
+	var err error
+	c.closeOnce.Do(func() {
+		close(c.done)
+		err = c.conn.Close()
+	})
+	return err
+}
+
+// pingLoop sends WebSocket ping frames at regular intervals.
+// If a ping write fails (connection dead), it reports through errHandler.
+func (c *WsAPIClient) pingLoop() {
+	ticker := time.NewTicker(wsAPIPingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			err := c.conn.WriteControl(
+				websocket.PingMessage,
+				[]byte{},
+				time.Now().Add(10*time.Second),
+			)
+			c.mu.Unlock()
+			if err != nil {
+				// Don't report errors on deliberate shutdown.
+				select {
+				case <-c.done:
+					return
+				default:
+				}
+				if c.errHandler != nil {
+					c.errHandler(fmt.Errorf("ping failed: %w", err))
+				}
+				return
+			}
+		}
+	}
+}
+
+// readMessages reads messages from WebSocket and dispatches to handlers.
+// When it exits (error or shutdown) it closes userDataChan so downstream
+// readers unblock immediately instead of hanging forever.
 func (c *WsAPIClient) readMessages() {
+	defer close(c.userDataChan)
 	for {
 		select {
 		case <-c.done:
@@ -88,11 +195,21 @@ func (c *WsAPIClient) readMessages() {
 		default:
 			_, message, err := c.conn.ReadMessage()
 			if err != nil {
+				// Don't fire errHandler on deliberate Close().
+				select {
+				case <-c.done:
+					return
+				default:
+				}
 				if c.errHandler != nil {
 					c.errHandler(err)
 				}
 				return
 			}
+
+			// Every received message proves the connection is alive.
+			c.lastMessageTime.Store(time.Now())
+			_ = c.conn.SetReadDeadline(time.Now().Add(wsAPIReadDeadline))
 
 			// First check if it's a subscription event (has "subscriptionId" and "event" fields)
 			// Format: {"subscriptionId":0,"event":{"e":"executionReport",...}}

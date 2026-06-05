@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -22,6 +24,20 @@ const (
 
 	// userDataStreamRateLimit represent number of messages that can be sent per second
 	userDataStreamRateLimit = 4
+
+	// userDataStreamReadDeadline is the maximum time we will wait on the User
+	// Data Stream socket without receiving ANY frame (a real event or, far more
+	// commonly on an idle account, a server ping) before we treat the socket as
+	// dead. Binance sends a ping on this stream roughly every 3 minutes, so 6
+	// minutes tolerates one fully missed ping as scheduling/network slack.
+	//
+	// Why this exists: without a read deadline, ReadMessage blocks forever when
+	// the underlying TCP connection dies without a FIN/RST (the exact silent
+	// death that froze account balances in prod). No error ever fired, so the
+	// errHandler never ran, hasError was never set, and the supervisor never
+	// reconnected. The deadline turns that silent hang into a timeout error
+	// that propagates through errHandler → hasError → supervisor restart.
+	userDataStreamReadDeadline = 6 * time.Minute
 )
 
 // WsRequestedUserDataStreamService handles both:
@@ -32,6 +48,9 @@ type WsRequestedUserDataStreamService struct {
 	apiKey    string
 	secretKey string
 	keepAlive bool
+	// proxyURL, when non-empty, routes BOTH the User Data Stream and the
+	// WebSocket API handshakes through this HTTP proxy. Empty = direct dial.
+	proxyURL string
 
 	// User Data Stream connection (for events)
 	streamConn      *websocket.Conn
@@ -43,6 +62,12 @@ type WsRequestedUserDataStreamService struct {
 
 	rateLimiter *time.Ticker
 	requestID   int64
+
+	// lastActivity is updated on every frame read from the User Data Stream —
+	// real events AND server pings. It lets callers/tests observe liveness on
+	// an otherwise idle stream (which emits no events for hours but is kept
+	// alive by ~3-min server pings). Stores time.Time.
+	lastActivity atomic.Value
 
 	doneC        chan struct{}
 	stopC        chan struct{}
@@ -59,20 +84,61 @@ type wsAPIResponseHandler struct {
 }
 
 func NewWsRequestedUserDataStreamService(listenKey, apiKey, secretKey string, keepAlive bool, errHandler ErrHandler) (service *WsRequestedUserDataStreamService, doneC, stopC chan struct{}) {
+	return NewWsRequestedUserDataStreamServiceWithProxy(listenKey, apiKey, secretKey, "", keepAlive, errHandler)
+}
+
+// NewWsRequestedUserDataStreamServiceWithProxy is like
+// NewWsRequestedUserDataStreamService but routes both the User Data Stream and
+// the WebSocket API handshakes through the given HTTP proxy
+// (format: http://user:pass@host:port). In production, opening every futures
+// account's user-data stream directly from one pod IP trips Binance's per-IP
+// connection limits (mass "use of closed network connection") and the API-key
+// IP-whitelist check (ip_forbidden). A WSS handshake runs over an HTTP CONNECT
+// tunnel that pins a single upstream TCP connection for the socket's lifetime,
+// so a rotating proxy gives each account its own stable exit IP. An empty
+// proxyURL falls back to a direct connection via DefaultDialer.
+func NewWsRequestedUserDataStreamServiceWithProxy(listenKey, apiKey, secretKey, proxyURL string, keepAlive bool, errHandler ErrHandler) (service *WsRequestedUserDataStreamService, doneC, stopC chan struct{}) {
 	service = &WsRequestedUserDataStreamService{
 		listenKey:    listenKey,
 		apiKey:       apiKey,
 		secretKey:    secretKey,
 		keepAlive:    keepAlive,
+		proxyURL:     proxyURL,
 		rateLimiter:  time.NewTicker(time.Second / userDataStreamRateLimit),
 		doneC:        make(chan struct{}),
 		stopC:        make(chan struct{}),
 		errHandler:   errHandler,
 		respHandlers: make(map[string]wsAPIResponseHandler),
 	}
+	service.lastActivity.Store(time.Now())
 	doneC = service.doneC
 	stopC = service.stopC
 	return
+}
+
+// LastActivity returns the time the User Data Stream last received any frame
+// (event or server ping). A stalling value means the stream is going silent.
+func (s *WsRequestedUserDataStreamService) LastActivity() time.Time {
+	if v, ok := s.lastActivity.Load().(time.Time); ok {
+		return v
+	}
+	return time.Time{}
+}
+
+// dialer returns a websocket dialer honoring s.proxyURL. When proxyURL is empty
+// it returns the shared DefaultDialer (direct connection).
+func (s *WsRequestedUserDataStreamService) dialer() (*websocket.Dialer, error) {
+	if s.proxyURL == "" {
+		return websocket.DefaultDialer, nil
+	}
+	parsed, err := url.Parse(s.proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse proxy URL: %w", err)
+	}
+	return &websocket.Dialer{
+		Proxy:            http.ProxyURL(parsed),
+		HandshakeTimeout: 45 * time.Second,
+	}, nil
 }
 
 func (s *WsRequestedUserDataStreamService) APIKey(apiKey string) *WsRequestedUserDataStreamService {
@@ -214,13 +280,25 @@ func (s *WsRequestedUserDataStreamService) connectUserDataStream() error {
 
 	// User Data Stream uses private endpoint with listenKey
 	endpoint := fmt.Sprintf("%s/%s", getWsPrivateEndpoint(), s.listenKey)
-	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	dialer, err := s.dialer()
+	if err != nil {
+		return err
+	}
+	conn, _, err := dialer.Dial(endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("unable to dial user data stream, endpoint: %s: %w", endpoint, err)
 	}
+	// Arm the read deadline immediately so a connection that dies before the
+	// first server ping is still detected.
+	_ = conn.SetReadDeadline(time.Now().Add(userDataStreamReadDeadline))
 	conn.SetPingHandler(func(pingPayload string) error {
 		s.streamConnMutex.Lock()
 		defer s.streamConnMutex.Unlock()
+		// A server ping is proof the connection is alive — push the read
+		// deadline forward so an otherwise idle (eventless) stream is not
+		// killed by its own watchdog, and record the activity for observers.
+		_ = conn.SetReadDeadline(time.Now().Add(userDataStreamReadDeadline))
+		s.lastActivity.Store(time.Now())
 		return conn.WriteControl(websocket.PongMessage, []byte(pingPayload), time.Now().Add(WebsocketTimeout))
 	})
 	s.streamConn = conn
@@ -240,7 +318,11 @@ func (s *WsRequestedUserDataStreamService) connectWebSocketAPI() error {
 
 	// WebSocket API endpoint (no listenKey needed, uses signature auth)
 	endpoint := getWsAPIFuturesEndpoint()
-	conn, _, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	dialer, err := s.dialer()
+	if err != nil {
+		return err
+	}
+	conn, _, err := dialer.Dial(endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("unable to dial websocket API, endpoint: %s: %w", endpoint, err)
 	}
@@ -278,6 +360,10 @@ func (s *WsRequestedUserDataStreamService) readStreamMessages() {
 			}
 			return
 		}
+		// Any successfully read frame means the socket is alive; extend the
+		// deadline so a busy stream never times out, and record activity.
+		_ = s.streamConn.SetReadDeadline(time.Now().Add(userDataStreamReadDeadline))
+		s.lastActivity.Store(time.Now())
 		if messageType == websocket.TextMessage {
 			s.handleStreamEvent(message)
 		}
